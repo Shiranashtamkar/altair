@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import types
+import warnings
 from importlib.metadata import version as importlib_version
 from typing import Any
 
@@ -378,3 +379,47 @@ def test_invalid_data_type():
         ValueError, match=r'"\(fd " is not one of the valid encoding data types'
     ):
         parse_shorthand(r"blah:(fd ")
+
+
+@pytest.mark.parametrize(
+    ("shorthand", "escaped"),
+    [
+        ("price.usd", r"price\.usd"),
+        ("price.usd:Q", r"price\.usd"),
+        ("sum(price.usd)", r"price\.usd"),
+        ("scores[0]", r"scores\[0\]"),
+    ],
+)
+def test_parse_shorthand_warns_on_unescaped_column_with_dot(
+    shorthand: str, escaped: str
+) -> None:
+    data = pd.DataFrame({"price.usd": [1.0, 2.0], "scores[0]": [3, 4]})
+    with pytest.warns(
+        UserWarning, match=r"Vega-Lite reads as access to a nested field"
+    ) as record:
+        parse_shorthand(shorthand, data)
+    assert f'"{escaped}"' in str(record[0].message)
+
+
+@pytest.mark.parametrize(
+    ("shorthand", "data"),
+    [
+        # Escaped: the column is used as is.
+        (r"price\.usd:Q", pd.DataFrame({"price.usd": [1.0, 2.0]})),
+        # No such column: the dot really is nested field access.
+        ("properties.name:N", pd.DataFrame({"properties": [{"name": "a"}]})),
+        # No data to check against.
+        ("price.usd:Q", None),
+    ],
+)
+def test_parse_shorthand_no_warning_for_dot(shorthand: str, data: Any) -> None:
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        parse_shorthand(shorthand, data)
+
+
+def test_chart_warns_on_unescaped_column_with_dot() -> None:
+    data = pd.DataFrame({"price.usd": [1.0, 2.0], "item": ["a", "b"]})
+    chart = alt.Chart(data).mark_bar().encode(x="price.usd:Q", y="item:N")
+    with pytest.warns(UserWarning, match=r"price\\\.usd"):
+        chart.to_dict()

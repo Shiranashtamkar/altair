@@ -554,6 +554,10 @@ def to_eager_narwhals_dataframe(data: IntoDataFrame) -> nw.DataFrame[Any]:
     return data_nw
 
 
+# A ".", "[" or "]" that is not escaped with a backslash.
+_UNESCAPED_NESTED_ACCESS = re.compile(r"(?<!\\)[.\[\]]")
+
+
 def parse_shorthand(  # noqa: C901
     shorthand: dict[str, Any] | str,
     data: IntoDataFrame | None = None,
@@ -721,6 +725,25 @@ def parse_shorthand(  # noqa: C901
             if isinstance(attrs["type"], tuple):
                 attrs["sort"] = attrs["type"][1]
                 attrs["type"] = attrs["type"][0]
+
+    # Vega-Lite reads an unescaped "." or "[...]" in a field name as access to a nested
+    # field, so a column whose name really contains these characters plots no values.
+    # Warn when the data has such a column, since the chart is otherwise silently empty.
+    if (
+        "field" in attrs
+        and is_data_type(data)
+        and _UNESCAPED_NESTED_ACCESS.search(attrs["field"])
+        and attrs["field"]
+        in nw.from_native(data, eager_or_interchange_only=True).columns
+    ):
+        escaped = _UNESCAPED_NESTED_ACCESS.sub(r"\\\g<0>", attrs["field"])
+        warnings.warn(
+            f'The column name "{attrs["field"]}" contains "." or "[", which Vega-Lite '
+            "reads as access to a nested field, so the chart will not show this column. "
+            f'To use the column name as is, escape these characters: "{escaped}". '
+            "For more details, see https://altair-viz.github.io/user_guide/encodings/index.html#escaping-special-characters-in-column-names",
+            stacklevel=1,
+        )
 
     # If an unescaped colon is still present, it's often due to an incorrect data type specification
     # but could also be due to using a column name with ":" in it.
